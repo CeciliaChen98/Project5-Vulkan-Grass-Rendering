@@ -12,7 +12,7 @@ layout(set = 0, binding = 0) uniform CameraBufferObject {
 layout(set = 1, binding = 0) uniform Time {
     float deltaTime;
     float totalTime;
-};
+} time;
 
 struct Blade {
     vec4 v0;
@@ -21,36 +21,139 @@ struct Blade {
     vec4 up;
 };
 
-// TODO: Add bindings to:
+
+vec3 computeWindDirection(float totalTime)
+{
+    // Base direction 
+    vec3 baseDir = normalize(vec3(1.0, 0.0, 0.2));
+
+    // Time-based oscillation to make wind sway gently
+    float swayX = sin(totalTime * 0.7);
+    float swayZ = cos(totalTime * 0.5 + 1.57); // phase offset
+    float swayY = sin(totalTime * 0.3) * 0.2;  // small vertical fluctuation
+
+    // Combine base direction with the time-varying components
+    vec3 windDir = normalize(baseDir + vec3(swayX * 0.3, swayY, swayZ * 0.3));
+
+    return windDir;
+}
+
 // 1. Store the input blades
+
+layout(set = 2, binding = 0, std430) buffer InBlades {
+    Blade blades[];
+} inBlades;
+
 // 2. Write out the culled blades
+
+layout(set = 2, binding = 0, std430) buffer CulledBlades {
+    Blade blades[];
+} culledBlades;
+
 // 3. Write the total number of blades remaining
 
-// The project is using vkCmdDrawIndirect to use a buffer as the arguments for a draw call
-// This is sort of an advanced feature so we've showed you what this buffer should look like
-//
-// layout(set = ???, binding = ???) buffer NumBlades {
-// 	  uint vertexCount;   // Write the number of blades remaining here
-// 	  uint instanceCount; // = 1
-// 	  uint firstVertex;   // = 0
-// 	  uint firstInstance; // = 0
-// } numBlades;
+layout(set = 0, binding = 3) buffer NumBlades {
+ 	uint vertexCount;   // Write the number of blades remaining here
+ 	uint instanceCount; // = 1
+    uint firstVertex;   // = 0
+ 	uint firstInstance; // = 0
+} numBlades;
 
 bool inBounds(float value, float bounds) {
     return (value >= -bounds) && (value <= bounds);
 }
 
 void main() {
+
+    const uint idx = gl_GlobalInvocationID.x;
+
 	// Reset the number of blades to 0
-	if (gl_GlobalInvocationID.x == 0) {
-		// numBlades.vertexCount = 0;
+	if (idx == 0u) {
+	    numBlades.vertexCount = 0;
 	}
 	barrier(); // Wait till all threads reach this point
 
     // TODO: Apply forces on every blade and update the vertices in the buffer
+    Blade b = inBlades.blades[idx];
+
+    float orientation = b.v0.w;
+    float height = b.v1.w;
+    float width = b.v2.w;
+    float stiffness = b.up.w;
+
+    vec3 up = b.up.xyz;
+    vec3 v0 = b.v0.xyz;
+    vec3 v1 = b.v1.xyz;
+    vec3 v2 = b.v2.xyz;
+
+    // Gravity
+    vec4 D = vec4(0.0);     // gravity direction
+    vec3 gE = normalize(D.xyz) * D.w;
+
+    vec3 dir = v2 - v0;
+    vec3 f = normalize(dir - dot(dir, up) * up);         // facing direction
+    vec3 gF = 0.25f * length(gE) * f;
+    vec3 g = gE + gF;
+
+    // Recovery
+    vec3 iv2 = v0 + up * height;
+    vec3 r = (iv2 - v2) * stiffness;
+
+    // Wind
+    vec3 w = computeWindDirection(time.totalTime);  // wind direction
+    float alignment = 1.0f - abs(dot(normalize(w), normalize(v2 - v0)));
+    float heightRatio = dot(v2 - v0, up) / height;
+    alignment *= heightRatio;
+    w = alignment * w;
+
+    vec3 tv2 = (g + r + w) * time.deltaTime;
+    v2 += tv2;
+
+    // State Validation
+    v2 = v2 - up * min(dot(up, v2 - v0), 0);
+    float l_proj = length(v2 - v0 - up * dot(up, v2 - v0));
+
+    v1 = v0 + height * up * max( 1.0f - l_proj/height, 0.05f * max(l_proj/height, 1.0f));
+    float L0 = length(v2 - v0);
+    float L1 = length(v1 - v0) + length(v2 - v1);
+    // degree = 2
+    float L = (2.0f * L0 + L1) / 3.0f;
+    float r = height / L;
+    vec3 v1_c = v0 + r * (v1 - v0);
+    vec3 v2 = v1_c + r * (v2 - v1);
+    v1 = v1_c;
+  
+    b.v1.xyz = v1;
+    b.v2.xyz = v2;
+    inBlades.blades[idx] = b;
 
 	// TODO: Cull blades that are too far away or not in the camera frustum and write them
 	// to the culled blades buffer
 	// Note: to do this, you will need to use an atomic operation to read and update numBlades.vertexCount
 	// You want to write the visible blades to the buffer without write conflicts between threads
+
+    // Orientation Culling
+    vec3 cameraForward = -vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2]);
+    if( abs(dot(f, cameraForward)) < 0.9f ){ return; }
+
+    // View-frustum Culling
+    vec3 m = 0.25f * v0 + 0.5 * v1 + 0.25* v2;  // Interpolation
+    
+    // Set tolerance t
+    float t = 0.02f;
+    vec4 test = camera.view * camera.proj * vec4(v0, 1.0f);
+    float h = test.w + t;
+    if (test.x > h || test.x < -h || test.y > h || 
+        test.y < -h || test.z > h || test.z < -h) { return; }
+
+    test = camera.view * camera.proj * vec4(v2, 1.0f);
+    h = test.w + t;
+    if (test.x > h || test.x < -h || test.y > h || 
+        test.y < -h || test.z > h || test.z < -h) { return; }
+
+    test = camera.view * camera.proj * vec4(m, 1.0f);
+    h = test.w + t;
+    if (test.x > h || test.x < -h || test.y > h || 
+        test.y < -h || test.z > h || test.z < -h) { return; }
+
 }
