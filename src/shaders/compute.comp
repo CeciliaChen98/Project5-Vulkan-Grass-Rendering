@@ -145,7 +145,7 @@ void main() {
     b.v2.xyz = v2;
     inBlades.blades[idx] = b;
 
-	// TODO: Cull blades that are too far away or not in the camera frustum and write them
+	// Cull blades that are too far away or not in the camera frustum and write them
 	// to the culled blades buffer
 	// Note: to do this, you will need to use an atomic operation to read and update numBlades.vertexCount
 	// You want to write the visible blades to the buffer without write conflicts between threads
