@@ -21,6 +21,26 @@ struct Blade {
     vec4 up;
 };
 
+// 1. Store the input blades
+
+layout(set = 2, binding = 0, std430) buffer InBlades {
+    Blade blades[];
+} inBlades;
+
+// 2. Write out the culled blades
+
+layout(set = 2, binding = 0, std430) buffer CulledBlades {
+    Blade blades[];
+} culledBlades;
+
+// 3. Write the total number of blades remaining
+// corresponds to VkDrawIndirectCommand structure
+layout(set = 0, binding = 3) buffer NumBlades {
+ 	uint vertexCount;   // Write the number of blades remaining here
+ 	uint instanceCount; // = 1
+    uint firstVertex;   // = 0
+ 	uint firstInstance; // = 0
+} numBlades;
 
 vec3 computeWindDirection(float totalTime)
 {
@@ -38,29 +58,27 @@ vec3 computeWindDirection(float totalTime)
     return windDir;
 }
 
-// 1. Store the input blades
+const uint  numBuckets = 8u; 
+const float maxDist = 50.0f;
+const float tolerance = 0.02f; // tolerance for frustum culling
 
-layout(set = 2, binding = 0, std430) buffer InBlades {
-    Blade blades[];
-} inBlades;
+bool isOutsideFrustum(vec3 pos)
+{
+    // Transform to clip space
+    vec4 clip = camera.proj * camera.view * vec4(pos, 1.0);
+    float h = clip.w + tolerance;
 
-// 2. Write out the culled blades
+    return (clip.x > h || clip.x < -h ||
+            clip.y > h || clip.y < -h ||
+            clip.z > h || clip.z < -h);
+}
 
-layout(set = 2, binding = 0, std430) buffer CulledBlades {
-    Blade blades[];
-} culledBlades;
-
-// 3. Write the total number of blades remaining
-
-layout(set = 0, binding = 3) buffer NumBlades {
- 	uint vertexCount;   // Write the number of blades remaining here
- 	uint instanceCount; // = 1
-    uint firstVertex;   // = 0
- 	uint firstInstance; // = 0
-} numBlades;
-
-bool inBounds(float value, float bounds) {
-    return (value >= -bounds) && (value <= bounds);
+bool distanceCull(float distance, uint id) {
+    if(distance > maxDist) { return true; }
+    float idx = mod(id, numBuckets);
+    // The closer the distance, the more likely it is to be kept
+    float limit = (1 - distance / maxDist) * float(numBuckets);
+    return idx < limit;
 }
 
 void main() {
@@ -73,7 +91,7 @@ void main() {
 	}
 	barrier(); // Wait till all threads reach this point
 
-    // TODO: Apply forces on every blade and update the vertices in the buffer
+    // Apply forces on every blade and update the vertices in the buffer
     Blade b = inBlades.blades[idx];
 
     float orientation = b.v0.w;
@@ -97,7 +115,7 @@ void main() {
 
     // Recovery
     vec3 iv2 = v0 + up * height;
-    vec3 r = (iv2 - v2) * stiffness;
+    vec3 recover = (iv2 - v2) * stiffness;
 
     // Wind
     vec3 w = computeWindDirection(time.totalTime);  // wind direction
@@ -106,7 +124,7 @@ void main() {
     alignment *= heightRatio;
     w = alignment * w;
 
-    vec3 tv2 = (g + r + w) * time.deltaTime;
+    vec3 tv2 = (g + recover + w) * time.deltaTime;
     v2 += tv2;
 
     // State Validation
@@ -120,7 +138,7 @@ void main() {
     float L = (2.0f * L0 + L1) / 3.0f;
     float r = height / L;
     vec3 v1_c = v0 + r * (v1 - v0);
-    vec3 v2 = v1_c + r * (v2 - v1);
+    v2 = v1_c + r * (v2 - v1);
     v1 = v1_c;
   
     b.v1.xyz = v1;
@@ -138,22 +156,16 @@ void main() {
 
     // View-frustum Culling
     vec3 m = 0.25f * v0 + 0.5 * v1 + 0.25* v2;  // Interpolation
-    
-    // Set tolerance t
-    float t = 0.02f;
-    vec4 test = camera.view * camera.proj * vec4(v0, 1.0f);
-    float h = test.w + t;
-    if (test.x > h || test.x < -h || test.y > h || 
-        test.y < -h || test.z > h || test.z < -h) { return; }
+    if (isOutsideFrustum(v0)) return;
+    if (isOutsideFrustum(v2)) return;
+    if (isOutsideFrustum(m)) return;
 
-    test = camera.view * camera.proj * vec4(v2, 1.0f);
-    h = test.w + t;
-    if (test.x > h || test.x < -h || test.y > h || 
-        test.y < -h || test.z > h || test.z < -h) { return; }
+    // Distance Culling
+    vec3 eye = -transpose(mat3(camera.view)) * camera.view[3].xyz;
+    float distance = length(v0 - eye - up * dot(v0 - eye, up));
+    if (distanceCull(distance, idx)) { return; }
 
-    test = camera.view * camera.proj * vec4(m, 1.0f);
-    h = test.w + t;
-    if (test.x > h || test.x < -h || test.y > h || 
-        test.y < -h || test.z > h || test.z < -h) { return; }
-
+    // Write the blade to the culled blades buffer
+    uint writeIdx = atomicAdd(numBlades.vertexCount, 1); //prevent race conditions
+    culledBlades.blades[writeIdx] = b;
 }
