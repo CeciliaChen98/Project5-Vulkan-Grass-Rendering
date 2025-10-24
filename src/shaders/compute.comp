@@ -12,7 +12,7 @@ layout(set = 0, binding = 0) uniform CameraBufferObject {
 layout(set = 1, binding = 0) uniform Time {
     float deltaTime;
     float totalTime;
-} time;
+};
 
 struct Blade {
     vec4 v0;
@@ -29,13 +29,13 @@ layout(set = 2, binding = 0, std430) buffer InBlades {
 
 // 2. Write out the culled blades
 
-layout(set = 2, binding = 0, std430) buffer CulledBlades {
+layout(set = 2, binding = 1, std430) buffer CulledBlades {
     Blade blades[];
 } culledBlades;
 
 // 3. Write the total number of blades remaining
 // corresponds to VkDrawIndirectCommand structure
-layout(set = 0, binding = 3) buffer NumBlades {
+layout(set = 2, binding = 2) buffer NumBlades {
  	uint vertexCount;   // Write the number of blades remaining here
  	uint instanceCount; // = 1
     uint firstVertex;   // = 0
@@ -118,13 +118,13 @@ void main() {
     vec3 recover = (iv2 - v2) * stiffness;
 
     // Wind
-    vec3 w = computeWindDirection(time.totalTime);  // wind direction
+    vec3 w = computeWindDirection(totalTime);  // wind direction
     float alignment = 1.0f - abs(dot(normalize(w), normalize(v2 - v0)));
     float heightRatio = dot(v2 - v0, up) / height;
     alignment *= heightRatio;
     w = alignment * w;
 
-    vec3 tv2 = (g + recover + w) * time.deltaTime;
+    vec3 tv2 = (g + recover + w) * deltaTime;
     v2 += tv2;
 
     // State Validation
