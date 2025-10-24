@@ -21,6 +21,7 @@ layout(location = 1) in vec4[] v1;
 layout(location = 2) in vec4[] v2;
 
 layout(location = 0) out vec3 fs_nor;
+layout(location = 1) out float fs_v;
 
 void main() {
 
@@ -44,9 +45,10 @@ void main() {
     vec3 t0 = normalize(mix(p1 - p0, p2 - p1, v));
     vec3 n = normalize(cross(t0, t1));
     fs_nor = n;
+    fs_v = v;
 
     float t = u + 0.5 * v - u * v;
-    vec3 pos = mix(c0, c1, u);
+    vec3 pos = mix(c0, c1, t);
 
     gl_Position = camera.proj * camera.view * vec4(pos, 1.0);
 }
