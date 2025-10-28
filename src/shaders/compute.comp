@@ -4,7 +4,9 @@
 #define WINDFORCE 1
 #define GRAVITY 1
 #define RECOVERY 1
-#define CULLING 1
+#define ORIENTATION 1
+#define DISTANCE 1
+#define VIEWFRUSTUM 1
 
 #define WORKGROUP_SIZE 32
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
@@ -179,19 +181,22 @@ void main() {
 	// Note: to do this, you will need to use an atomic operation to read and update numBlades.vertexCount
 	// You want to write the visible blades to the buffer without write conflicts between threads
     vec3 cameraPos = inverse(camera.view)[3].xyz;
-    vec3 viewDir = v0 - cameraPos;
-    vec3 cameraForward = normalize(viewDir - up * dot(viewDir, up));
+    vec3 viewDir = v0 - cameraPos - up * dot(v0 - cameraPos, up);
 
-#if CULLING
+#if ORIENTATION
     // Orientation Culling
-    if( abs(dot(t1, cameraForward)) < threshold ){ return; }
+    if( abs(dot(t1, normalize(viewDir))) < threshold ){ return; }
+#endif
 
+#if VIEWFRUSTUM
     // View-frustum Culling
     vec3 m = 0.25f * v0 + 0.5 * v1 + 0.25* v2;  // Interpolation
     if(isOutsideFrustum(m) && isOutsideFrustum(v0) && isOutsideFrustum(v2)) { return; }
+#endif
 
+#if DISTANCE
     // Distance Culling
-    float distance = length(v0 - cameraPos - up * dot(v0 - cameraPos, up));
+    float distance = length(viewDir);
     if (distanceCull(distance, idx)) { return; }
 #endif
 

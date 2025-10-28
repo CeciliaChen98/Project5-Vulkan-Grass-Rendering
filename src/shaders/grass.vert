@@ -15,6 +15,7 @@ layout(location = 3) in vec4 up;
 layout(location = 0) out vec4 model_v0;
 layout(location = 1) out vec4 model_v1;
 layout(location = 2) out vec4 model_v2;
+layout(location = 3) out vec4 model_up;
 
 out gl_PerVertex {
     vec4 gl_Position;
@@ -29,6 +30,7 @@ void main() {
     model_v0 = model * v0;
     model_v1 = model * v1;
     model_v2 = model * v2;
+    model_up = model * up;
 
     model_v0.w = orientation;
     model_v1.w = height;
